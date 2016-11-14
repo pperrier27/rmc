@@ -2,6 +2,17 @@
 
 set -e
 
+MONGODB_VERSION=3.2  # latest stable, Nov. 2016
+NODEJS_MAJ_VERSION=6 # idem
+SPARK_VERSION=2.0.1  # idem
+HADOOP_VERSION=2.6   # idem
+
+SUDO="sudo"
+# Debian doesn't have $SUDO, so adapt to that
+if ! which sudo > /dev/null; then
+    $SUDO=""
+fi
+
 install_packages() {
     # mongod starts automatically after install. We don't want that.
     should_stop_mongo=""
@@ -9,24 +20,12 @@ install_packages() {
       should_stop_mongo=yes
     fi
 
-    # To get add-apt-repository
-    if ! which add-apt-repository >/dev/null; then
-      # Needed on a fresh install
-      sudo apt-get update
-      sudo apt-get install -y python-software-properties
-    fi
-
     updated_apt_repo=""
 
     # To get the most recent nodejs, later.
-    if ! ls /etc/apt/sources.list.d/ 2>&1 | grep -q chris-lea-node_js; then
-        sudo add-apt-repository -y ppa:chris-lea/node.js
-        updated_apt_repo=yes
-    fi
-
-    # To get the most recent git.
-    if ! ls /etc/apt/sources.list.d/ 2>&1 | grep -q git-core-ppa; then
-        sudo add-apt-repository -y ppa:git-core/ppa
+    # This will also get you npm, which will also be needed later.
+    if ! ls /etc/apt/sources.list.d/ 2>&1 | grep -q chris-lea*node_js; then
+        curl -sL https://deb.nodesource.com/setup_"${NODEJS_MAJ_VERSION}".x | $SUDO -E bash - # straight from the nodejs install instructions for version 6.x
         updated_apt_repo=yes
     fi
 
@@ -34,86 +33,73 @@ install_packages() {
     wget http://download.redis.io/redis-stable.tar.gz
     tar xvzf redis-stable.tar.gz
     cd redis-stable
-    sudo make install
+    $SUDO make install
     cd ..
-    sudo rm -rf redis-stable
+    $SUDO rm -rf redis-stable
+    $SUDO rm -rf redis-stable.tar.gz
 
-    # To get the most recent mongodb
-    if ! ls /etc/apt/sources.list.d/ 2>&1 | grep -q 10gen; then
-        sudo apt-key adv --keyserver keyserver.ubuntu.com --recv 7F0CEB10
-        sudo rm -rf /etc/apt/sources.list.d/10gen.list
-        sudo /bin/sh -c 'echo "deb http://downloads-distro.mongodb.org/repo/ubuntu-upstart dist 10gen" > /etc/apt/sources.list.d/10gen.list'
+    # To get the most recent mongodb, dependent on the version specified in $MONGODB_VERSION
+    if ! ls /etc/apt/sources.list.d/ 2>&1 | grep -q mongo; then
+        $SUDO apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv EA312927
+	echo "deb http://repo.mongodb.org/apt/ubuntu "$(lsb_release -sc)"/mongodb-org/"${MONGODB_VERSION}" multiverse" | \
+$SUDO tee /etc/apt/sources.list.d/mongodb-org-"${MONGDB_VERSION}".list
         updated_apt_repo=yes
     fi
 
     # Register all that stuff we just did.
     if [ -n "$updated_apt_repo" ]; then
-        sudo apt-get update -qq -y || true
+        $SUDO apt-get update -qq -y || true
     fi
 
-    sudo apt-get install -y \
+    $SUDO apt-get install -y \
         build-essential \
-        git \
+	git \
         python-setuptools python-pip python-dev \
         libxml2-dev libxslt-dev \
         ruby rubygems-integration ruby-dev \
         nodejs \
         redis-server \
-        mongodb-10gen \
+        mongodb-org \
+	nodejs \
+	nodejs-legacy \ # need this for some things to work with the node alias
         unzip
 
     if [ -n "$should_stop_mongo" ]; then
-        sudo service mongodb stop
+        $SUDO service mongodb stop
     fi
 }
 
+# Uses npm to install PhantomJS. npm should have been obtained from the NodeJS install in install_packages
 install_phantomjs() {
     if ! which phantomjs >/dev/null; then
-        (
-            cd /usr/local/share
-            case `uname -m` in
-                i?86) mach=i686;;
-                *) mach=x86_64;;
-            esac
-            sudo rm -rf phantomjs
-            wget "https://phantomjs.googlecode.com/files/phantomjs-1.9.2-linux-${mach}.tar.bz2" -O- | sudo tar xfj -
-
-            sudo ln -snf /usr/local/share/phantomjs-1.9.2-linux-${mach}/bin/phantomjs /usr/local/bin/phantomjs
-        )
+	$SUDO npm install phantomjs
         which phantomjs >/dev/null
     fi
 }
 
 # Assumes that Chrome is installed
+# Uses npm to install chromedriver. npm should have been obtained from the NodeJS install in intall_packages
 install_chromedriver() {
     if ! which chromedriver >/dev/null; then
-        (
-            case `uname -m` in
-                i?86) bits=32;;
-                *) bits=64;;
-            esac
-
-            TMP_FILE=$(tempfile)
-            wget "http://chromedriver.storage.googleapis.com/2.9/chromedriver_linux${bits}.zip" -O $TMP_FILE
-            sudo unzip $TMP_FILE chromedriver -d /usr/local/bin/
-            rm $TMP_FILE
-            sudo chmod 755 /usr/local/bin/chromedriver
-        )
+        $SUDO npm install chromedriver
         which chromedriver >/dev/null
     fi
 }
 
 install_spark() {
     rm -rf spark
-    wget "http://apache.mirror.vexxhost.com/spark/spark-1.6.0/spark-1.6.0-bin-hadoop2.6.tgz" -O tempfile
+    wget "http://apache.mirror.vexxhost.com/spark/spark-"${SPARK_VERSION}"/spark-"${SPARK_VERSION}"-bin-hadoop"${HADOOP_VERSION}".tgz" -O tempfile
     mkdir spark
     tar xzf tempfile -C spark --strip-components=1
     rm tempfile
     export SPARK_HOME=${PWD}"/spark"
 }
 
-# Get password up front
-sudo echo
+# Must run this as root
+if (( $(id -u) -ne 0 )); then
+  echo "ERROR: This script must be run as root."
+  exit 1
+fi
 
 install_packages
 install_phantomjs
